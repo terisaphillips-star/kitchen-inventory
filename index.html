@@ -46,28 +46,32 @@
   .category-head h2 { font-size: 15px; margin:0; letter-spacing:.5px; }
   .chevron { color:#8f969f; font-size:16px; }
   .item {
-    display:flex; align-items:center; gap:8px; min-height:56px;
-    border-bottom:1px solid #30343a; padding:6px 8px;
-    border-radius:7px; touch-action:none;
+    display:flex; align-items:center; gap:6px; min-height:40px;
+    border-bottom:1px solid #30343a; padding:3px 6px;
+    border-radius:7px;
   }
   .item:nth-of-type(even) { background:#181b1f; }
   .item.dragging { opacity:.55; }
+  .item.drop-before { box-shadow: inset 0 2px 0 0 #6ea8fe; }
+  .item.drop-after { box-shadow: inset 0 -2px 0 0 #6ea8fe; }
   .drag-handle {
-    flex:0 0 18px; color:#8d949d; font-size:16px; cursor:grab;
-    user-select:none; text-align:center;
+    flex:0 0 40px; height:40px; display:flex; align-items:center; justify-content:center;
+    color:#c3c8cf; font-size:20px; cursor:grab;
+    user-select:none; text-align:center; touch-action:none;
+    -webkit-tap-highlight-color: transparent;
   }
-  .item-name { flex:1 1 auto; min-width:0; font-size:16px; line-height:1.2; overflow-wrap:anywhere; }
-  .controls { display:flex; align-items:center; gap:5px; flex:0 0 auto; }
+  .item-name { flex:1 1 auto; min-width:0; font-size:18px; line-height:1.25; overflow-wrap:anywhere; }
+  .controls { display:flex; align-items:center; gap:4px; flex:0 0 auto; }
   .qty {
-    min-width:28px; text-align:center; font-size:18px; font-weight:700;
+    min-width:24px; text-align:center; font-size:17px; font-weight:700;
     transition: transform .14s ease, background .14s ease;
-    border-radius:8px; padding:4px 1px;
+    border-radius:8px; padding:3px 1px;
   }
   .qty.flash { transform: scale(1.28); background:#30343a; }
   button { font: inherit; }
   .round {
-    width:40px; height:40px; border-radius:11px; border:1px solid #4a5058;
-    background:#24282e; color:#ffffff; font-size:23px; line-height:1; cursor:pointer;
+    width:36px; height:36px; border-radius:10px; border:1px solid #4a5058;
+    background:#24282e; color:#ffffff; font-size:21px; line-height:1; cursor:pointer;
     -webkit-tap-highlight-color: transparent;
   }
   .round:disabled { opacity:.35; cursor:default; }
@@ -103,11 +107,11 @@
   @media (max-width:480px) {
     .app { padding: 18px 10px 35px; }
     h1 { font-size:28px; }
-    .item { gap:5px; padding-left:5px; padding-right:5px; }
-    .item-name { font-size:15px; }
-    .drag-handle { flex-basis:14px; font-size:14px; }
+    .item { gap:4px; padding-left:4px; padding-right:4px; }
+    .item-name { font-size:17px; }
+    .drag-handle { flex-basis:36px; font-size:19px; }
     .controls { gap:3px; }
-    .round { width:38px; height:38px; }
+    .round { width:34px; height:34px; font-size:19px; }
   }
 </style>
 </head>
@@ -218,7 +222,6 @@ function categoryEl(category, items) {
   items.forEach(([name,q], idx) => {
     const row = document.createElement("div");
     row.className="item";
-    row.draggable = true;
     row.dataset.index = idx;
     row.dataset.category = category;
 
@@ -256,32 +259,7 @@ function categoryEl(category, items) {
     row.append(handle,nm,controls);
     wrap.appendChild(row);
 
-    row.addEventListener("dragstart", e => {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", idx);
-      row.classList.add("dragging");
-    });
-    row.addEventListener("dragend", () => {
-      row.classList.remove("dragging");
-      save(); render();
-    });
-    row.addEventListener("dragover", e => {
-      e.preventDefault();
-      const dragging = wrap.querySelector(".dragging");
-      if (!dragging || dragging === row) return;
-      const rect = row.getBoundingClientRect();
-      const before = e.clientY < rect.top + rect.height / 2;
-      wrap.insertBefore(dragging, before ? row : row.nextSibling);
-    });
-    row.addEventListener("drop", e => {
-      e.preventDefault();
-      const rows = [...wrap.querySelectorAll(".item")];
-      const ordered = rows.map(r => Number(r.dataset.index));
-      const oldItems = data[tab][category].slice();
-      data[tab][category] = ordered.map(i => oldItems[i]);
-      save();
-      render();
-    });
+    handle.addEventListener("pointerdown", e => startDrag(e, row, wrap, category));
   });
 
   const addBtn = document.createElement("button");
@@ -294,6 +272,51 @@ function categoryEl(category, items) {
   };
   wrap.append(addBtn,panel);
   return wrap;
+}
+
+function startDrag(e, row, wrap, category) {
+  e.preventDefault();
+  const handle = e.currentTarget;
+  handle.setPointerCapture(e.pointerId);
+  row.classList.add("dragging");
+  document.body.style.userSelect = "none";
+
+  function onMove(ev) {
+    const y = ev.clientY;
+    const siblings = [...wrap.querySelectorAll(".item")].filter(r => r !== row);
+    let target = null, placeBefore = true;
+    for (const sib of siblings) {
+      const rect = sib.getBoundingClientRect();
+      const mid = rect.top + rect.height / 2;
+      if (y < mid) { target = sib; placeBefore = true; break; }
+      target = sib; placeBefore = false;
+    }
+    if (target) {
+      wrap.insertBefore(row, placeBefore ? target : target.nextSibling);
+    } else if (!siblings.length) {
+      // only row, nothing to do
+    }
+  }
+
+  function onUp(ev) {
+    handle.releasePointerCapture(ev.pointerId);
+    handle.removeEventListener("pointermove", onMove);
+    handle.removeEventListener("pointerup", onUp);
+    handle.removeEventListener("pointercancel", onUp);
+    row.classList.remove("dragging");
+    document.body.style.userSelect = "";
+
+    const rows = [...wrap.querySelectorAll(".item")];
+    const ordered = rows.map(r => Number(r.dataset.index));
+    const oldItems = data[tab][category].slice();
+    data[tab][category] = ordered.map(i => oldItems[i]);
+    save();
+    render();
+  }
+
+  handle.addEventListener("pointermove", onMove);
+  handle.addEventListener("pointerup", onUp);
+  handle.addEventListener("pointercancel", onUp);
 }
 
 function change(category, idx, delta) {
