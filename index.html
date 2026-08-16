@@ -10,6 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Kitchen Inventory">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src 'self' https://api.github.com; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
 <title>Kitchen Inventory</title>
 <style>
   * { box-sizing: border-box; }
@@ -103,6 +104,70 @@
   }
   .empty { color:#8f969f; font-size:14px; padding:14px 2px 0; }
   .hidden { display:none; }
+
+  .header-row {
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  .header-row h1 { flex:1 1 auto; min-width:0; }
+  .sync-pill {
+    flex:0 0 auto; display:flex; align-items:center; gap:6px;
+    border:1px solid #4a5058; background:#1b1e22; color:#d9dde2;
+    border-radius:999px; padding:7px 12px; font-size:13px; font-weight:600;
+    cursor:pointer; -webkit-tap-highlight-color: transparent;
+  }
+  .sync-pill:active { transform: scale(.96); }
+  .sync-dot { width:8px; height:8px; border-radius:50%; background:#8f969f; flex:0 0 auto; }
+  .sync-pill[data-state="synced"] .sync-dot { background:#3ddc7a; }
+  .sync-pill[data-state="syncing"] .sync-dot { background:#4a9eff; animation: pulse 1s ease-in-out infinite; }
+  .sync-pill[data-state="offline"] .sync-dot { background:#e6b545; }
+  .sync-pill[data-state="conflict"] .sync-dot,
+  .sync-pill[data-state="error"] .sync-dot { background:#e6534a; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.35; } }
+
+  .banner {
+    background:#241c14; border:1px solid #5a4324; border-radius:14px;
+    padding:14px 16px; margin-bottom:20px; font-size:14px; line-height:1.4;
+  }
+  .banner.error { background:#241414; border-color:#5a2424; }
+  .banner-title { font-weight:700; margin-bottom:4px; }
+  .banner-actions { display:flex; gap:8px; margin-top:12px; flex-wrap:wrap; }
+  .banner-actions button {
+    border:1px solid #59616b; background:#24282e; color:#f2f3f5;
+    border-radius:10px; padding:9px 14px; font-size:14px; font-weight:600; cursor:pointer;
+  }
+  .banner-actions button.primary { background:#e7e9ec; color:#15171a; border-color:#e7e9ec; }
+
+  .modal-overlay {
+    position:fixed; inset:0; background:rgba(0,0,0,.55);
+    display:flex; align-items:flex-end; justify-content:center; z-index:50;
+  }
+  .modal-overlay.hidden { display:none; }
+  @media (min-width:520px) { .modal-overlay { align-items:center; } }
+  .modal {
+    background:#1b1e22; border:1px solid #30343a; border-radius:18px 18px 0 0;
+    width:100%; max-width:460px; max-height:88vh; overflow:auto;
+    padding:20px 18px 24px;
+  }
+  @media (min-width:520px) { .modal { border-radius:18px; } }
+  .modal h2 { font-size:19px; margin:0 0 4px; }
+  .modal p.hint { color:#a9afb8; font-size:13px; margin:0 0 16px; line-height:1.4; }
+  .field { margin-bottom:12px; }
+  .field label { display:block; font-size:13px; color:#a9afb8; margin-bottom:5px; }
+  .field input {
+    width:100%; border:1px solid #4b535d; border-radius:10px; padding:11px 12px;
+    font-size:16px; outline:none; color:#f2f3f5; background:#24282e;
+  }
+  .modal-status { font-size:13px; margin:10px 0 4px; min-height:18px; }
+  .modal-status.ok { color:#3ddc7a; }
+  .modal-status.err { color:#e6534a; }
+  .modal-actions { display:flex; gap:8px; margin-top:16px; }
+  .modal-actions button {
+    flex:1 1 auto; border:0; border-radius:10px; padding:12px; font-size:15px;
+    font-weight:700; cursor:pointer;
+  }
+  .modal-actions .btn-save { background:#e7e9ec; color:#15171a; }
+  .modal-actions .btn-cancel { background:#2a2e34; color:#d9dde2; }
+  .modal-actions .btn-danger { background:transparent; color:#e6534a; border:1px solid #5a2424; flex:0 0 auto; }
   @media (max-width:480px) {
     .app { padding: 18px 10px 35px; }
     h1 { font-size:28px; }
@@ -116,12 +181,53 @@
 </head>
 <body>
 <div class="app">
-  <h1>Kitchen Inventory</h1>
+  <div class="header-row">
+    <h1>Kitchen Inventory</h1>
+    <button class="sync-pill" id="syncPill" data-state="unconfigured" type="button">
+      <span class="sync-dot"></span><span id="syncPillLabel">Set up sync</span>
+    </button>
+  </div>
+  <div id="syncBanner"></div>
   <div class="tabs">
     <button class="tab active" data-tab="dinner">Dinner Inventory</button>
     <button class="tab" data-tab="ingredients">Ingredients</button>
   </div>
   <div id="content"></div>
+</div>
+
+<div class="modal-overlay hidden" id="syncModalOverlay">
+  <div class="modal">
+    <h2>Cloud Sync</h2>
+    <p class="hint">Stores this inventory in a private GitHub repo so it syncs between your devices. Uses a fine-grained personal access token scoped to just that repo.</p>
+    <div class="field">
+      <label for="cfgOwner">GitHub username</label>
+      <input id="cfgOwner" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="terisaphillips-star">
+    </div>
+    <div class="field">
+      <label for="cfgRepo">Repository name</label>
+      <input id="cfgRepo" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="kitchen-inventory-data">
+    </div>
+    <div class="field">
+      <label for="cfgPath">File path</label>
+      <input id="cfgPath" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="inventory.json">
+    </div>
+    <div class="field">
+      <label for="cfgBranch">Branch</label>
+      <input id="cfgBranch" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="main">
+    </div>
+    <div class="field">
+      <label for="cfgToken">Access token</label>
+      <input id="cfgToken" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="github_pat_…">
+    </div>
+    <div class="modal-status" id="cfgStatus"></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" id="cfgCancel" type="button">Cancel</button>
+      <button class="btn-save" id="cfgSave" type="button">Test &amp; Save</button>
+    </div>
+    <div class="modal-actions" id="cfgRemoveRow" style="display:none">
+      <button class="btn-danger" id="cfgRemove" type="button">Remove sync from this device</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -143,6 +249,10 @@ let data = JSON.parse(localStorage.getItem("kitchenInventoryV1") || "null") || i
 let history = JSON.parse(localStorage.getItem("kitchenInventoryHistoryV1") || "[]");
 let tab = "dinner";
 let collapsed = {};
+// Declared here (not as `const Sync = ...` further down) so that save()'s
+// early unconditional call at startup, before the Sync module below has run,
+// sees a plain null instead of throwing a temporal-dead-zone ReferenceError.
+let Sync = null;
 function purgeZeroItemsOnOpen() {
   Object.values(data).forEach(tabObj => Object.keys(tabObj).forEach(cat => {
     tabObj[cat] = tabObj[cat].filter(([name,q]) => q > 0);
@@ -155,6 +265,7 @@ save();
 function save() {
   localStorage.setItem("kitchenInventoryV1", JSON.stringify(data));
   localStorage.setItem("kitchenInventoryHistoryV1", JSON.stringify(history));
+  if (Sync) Sync.onLocalChange();
 }
 
 function allPrevious(category) {
@@ -170,7 +281,9 @@ function recordHistory(category, name) {
 }
 
 function totalDinner() {
-  return data.dinner["Main Meal Portions"].reduce((sum, [,q]) => sum + q, 0);
+  // Defensive: a hand-edited sync file could be missing this category entirely.
+  const items = (data.dinner && data.dinner["Main Meal Portions"]) || [];
+  return items.reduce((sum, [,q]) => sum + q, 0);
 }
 
 function weeks() {
@@ -188,7 +301,7 @@ function render() {
       <div class="summary-sub">≈ ${weeks().toFixed(1)} weeks of dinners</div>`;
     root.appendChild(s);
   }
-  Object.entries(data[tab]).forEach(([category, items]) => root.appendChild(categoryEl(category, items)));
+  Object.entries(data[tab] || {}).forEach(([category, items]) => root.appendChild(categoryEl(category, items)));
 }
 
 
@@ -197,7 +310,12 @@ function categoryEl(category, items) {
   wrap.className = "category";
   const head = document.createElement("div");
   head.className = "category-head";
-  head.innerHTML = `<h2>${category.toUpperCase()}</h2><span class="chevron">${collapsed[category] ? "▸" : "▾"}</span>`;
+  const h2 = document.createElement("h2");
+  h2.textContent = category.toUpperCase();
+  const chev = document.createElement("span");
+  chev.className = "chevron";
+  chev.textContent = collapsed[category] ? "▸" : "▾";
+  head.append(h2, chev);
   head.onclick = () => { collapsed[category] = !collapsed[category]; render(); };
   wrap.appendChild(head);
   if (collapsed[category]) return wrap;
@@ -342,6 +460,639 @@ function addPanel(category) {
   return p;
 }
 
+/* =====================================================================
+   Cloud sync — a private GitHub repo holding one hand-editable JSON file.
+   Self-contained: the rest of the app only ever calls Sync.onLocalChange()
+   (from save()) and Sync.init() (once, at the bottom of this script).
+   ===================================================================== */
+Sync = (function () {
+  const CONFIG_KEY = "kiSyncConfig";
+  const SHA_KEY = "kiSyncSha";
+  const BASE_KEY = "kiSyncBase";
+  const LAST_KEY = "kiSyncLastAt";
+  const API = "https://api.github.com";
+  const PUSH_DEBOUNCE_MS = 2000;
+  const PUSH_MAX_WAIT_MS = 15000;
+
+  let cfg = null;              // {owner, repo, path, branch, token, device}
+  let sha = null;               // blob sha of the version this device last saw
+  let base = null;              // canonical string as of the last successful sync
+  let lastSyncedAt = null;
+  let state = "unconfigured";   // unconfigured | synced | syncing | offline | conflict | error
+  let lastError = "";
+  let lastErrorStatus = null;
+  let conflictRemote = null;    // { sha, text, parsed } while state === conflict/error(bad remote)
+  let remoteReadError = null;   // message shown above the conflict/error banner priority
+  let pendingRemoteDoc = null;  // a pull that arrived while the user was mid-edit
+
+  let pushTimer = null;
+  let pushFirstQueuedAt = null;
+  let pushInFlight = false;
+  let pendingPushAfterInFlight = false;
+  let pullInFlight = false;
+
+  // ---------- small helpers ----------
+
+  function guessDeviceName() {
+    const ua = navigator.userAgent || "";
+    if (/iPhone/.test(ua)) return "iPhone";
+    if (/iPad/.test(ua)) return "iPad";
+    if (/Android/.test(ua)) return "Android";
+    if (/Macintosh/.test(ua)) return "Mac";
+    if (/Windows/.test(ua)) return "Windows PC";
+    return "device";
+  }
+
+  function relTime(ts) {
+    const s = Math.round((Date.now() - ts) / 1000);
+    if (s < 10) return "just now";
+    if (s < 60) return s + "s ago";
+    const m = Math.round(s / 60);
+    if (m < 60) return m + "m ago";
+    const h = Math.round(m / 60);
+    if (h < 24) return h + "h ago";
+    return Math.round(h / 24) + "d ago";
+  }
+
+  function userIsEditing() {
+    const a = document.activeElement;
+    if (!a) return false;
+    if (a.tagName === "INPUT" || a.tagName === "TEXTAREA") return true;
+    return !!(a.closest && a.closest(".add-panel.open"));
+  }
+
+  // ---------- UTF-8 safe base64 (GitHub's Contents API is base64 both ways) ----------
+
+  function b64encode(str) {
+    const bytes = new TextEncoder().encode(str);
+    let binary = "";
+    const chunk = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunk) {
+      binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+    }
+    return btoa(binary);
+  }
+
+  function b64decode(b64) {
+    const binary = atob(String(b64).replace(/\s/g, "")); // GitHub wraps content at ~60 chars
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new TextDecoder().decode(bytes);
+  }
+
+  // ---------- serialization: one item per line, so diffs stay readable ----------
+
+  function stringifyDoc(doc) {
+    const q = JSON.stringify;
+    const L = [];
+    L.push("{");
+    L.push(`  "schema": ${doc.schema},`);
+    L.push(`  "updatedAt": ${q(doc.updatedAt)},`);
+    L.push(`  "updatedBy": ${q(doc.updatedBy)},`);
+    L.push(`  "data": {`);
+    const tabKeys = Object.keys(doc.data);
+    tabKeys.forEach((tabKey, ti) => {
+      L.push(`    ${q(tabKey)}: {`);
+      const catKeys = Object.keys(doc.data[tabKey]);
+      catKeys.forEach((catKey, ci) => {
+        const items = doc.data[tabKey][catKey];
+        const catTail = ci < catKeys.length - 1 ? "," : "";
+        if (!items.length) { L.push(`      ${q(catKey)}: []${catTail}`); return; }
+        L.push(`      ${q(catKey)}: [`);
+        items.forEach((item, ii) => {
+          L.push(`        ${q(item)}${ii < items.length - 1 ? "," : ""}`);
+        });
+        L.push(`      ]${catTail}`);
+      });
+      L.push(`    }${ti < tabKeys.length - 1 ? "," : ""}`);
+    });
+    L.push(`  },`);
+    L.push(`  "history": ${q(doc.history)}`);
+    L.push("}");
+    return L.join("\n") + "\n";
+  }
+
+  // Lenient on read, strict on write. Never throws; never partially applies —
+  // returns {ok:false, error} and the caller leaves local data untouched.
+  function parseDoc(text) {
+    let obj;
+    try { obj = JSON.parse(text); }
+    catch (e) { return { ok: false, error: "The file isn't valid JSON — " + e.message }; }
+    try {
+      if (!obj || typeof obj !== "object" || !obj.data || typeof obj.data !== "object") {
+        throw new Error('The file is missing the expected "data" object.');
+      }
+      const cleanData = {};
+      for (const tabKey of Object.keys(obj.data)) {
+        const tabObj = obj.data[tabKey];
+        if (!tabObj || typeof tabObj !== "object") {
+          throw new Error(`"${tabKey}" should be an object of categories.`);
+        }
+        cleanData[tabKey] = {};
+        for (const catKey of Object.keys(tabObj)) {
+          const items = tabObj[catKey];
+          if (!Array.isArray(items)) throw new Error(`"${catKey}" should be a list of items.`);
+          cleanData[tabKey][catKey] = items.map((it) => {
+            if (!Array.isArray(it) || typeof it[0] !== "string") {
+              throw new Error(`Bad item in "${catKey}" — expected ["Name", quantity].`);
+            }
+            const qty = Math.max(0, Math.round(Number(it[1]) || 0));
+            return [it[0], qty];
+          });
+        }
+      }
+      // Defensive: keep the two tabs and the one hard-coded category the rest
+      // of the app depends on (totalDinner()/render()) always present, even
+      // if a hand-edit removed them.
+      if (!cleanData.dinner) cleanData.dinner = {};
+      if (!cleanData.dinner["Main Meal Portions"]) cleanData.dinner["Main Meal Portions"] = [];
+      if (!cleanData.ingredients) cleanData.ingredients = {};
+
+      let cleanHistory = [];
+      if (Array.isArray(obj.history)) {
+        cleanHistory = obj.history
+          .filter((h) => h && typeof h.category === "string" && typeof h.name === "string")
+          .map((h) => ({ category: h.category, name: h.name }));
+      }
+      return { ok: true, doc: { data: cleanData, history: cleanHistory } };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+
+  function canonical() {
+    return JSON.stringify({ data, history });
+  }
+
+  function isDirty() {
+    return base === null || canonical() !== base;
+  }
+
+  function isConfigured() {
+    return !!(cfg && cfg.owner && cfg.repo && cfg.token);
+  }
+
+  // ---------- persistence of sync bookkeeping (separate from the app's own keys) ----------
+
+  function loadConfig() {
+    try { return JSON.parse(localStorage.getItem(CONFIG_KEY) || "null"); }
+    catch { return null; }
+  }
+  function saveConfig(c) { localStorage.setItem(CONFIG_KEY, JSON.stringify(c)); }
+  function clearConfig() {
+    localStorage.removeItem(CONFIG_KEY);
+    localStorage.removeItem(SHA_KEY);
+    localStorage.removeItem(BASE_KEY);
+    localStorage.removeItem(LAST_KEY);
+  }
+  function persist() {
+    if (sha) localStorage.setItem(SHA_KEY, sha); else localStorage.removeItem(SHA_KEY);
+    if (base !== null) localStorage.setItem(BASE_KEY, base); else localStorage.removeItem(BASE_KEY);
+    if (lastSyncedAt) localStorage.setItem(LAST_KEY, String(lastSyncedAt)); else localStorage.removeItem(LAST_KEY);
+  }
+  // Writes the app's own two localStorage keys WITHOUT going through save(),
+  // so adopting a remote doc can't turn around and push itself right back.
+  function persistLocalDataOnly() {
+    localStorage.setItem("kitchenInventoryV1", JSON.stringify(data));
+    localStorage.setItem("kitchenInventoryHistoryV1", JSON.stringify(history));
+  }
+
+  // ---------- GitHub Contents API ----------
+
+  function apiHeaders() {
+    return {
+      "Authorization": "Bearer " + cfg.token,
+      "Accept": "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28"
+    };
+  }
+  function contentsUrl() {
+    const pathParts = cfg.path.split("/").map(encodeURIComponent).join("/");
+    return `${API}/repos/${encodeURIComponent(cfg.owner)}/${encodeURIComponent(cfg.repo)}/contents/${pathParts}`;
+  }
+  // Distinguishes a real GitHub API error (has .status, e.g. from a failed
+  // fetchRemote()) from a plain network failure — a bad/expired token should
+  // read as "needs setup", not "offline — will retry on its own", since retrying
+  // alone will never fix it.
+  function classifyFetchError(e) {
+    if (e && e.status === 401) setState("error", "The GitHub token was rejected — it may be wrong or expired.", 401);
+    else if (e && e.status === 403) setState("error", e.message || "Access denied by GitHub.", 403);
+    else setState("offline");
+  }
+  async function apiError(res) {
+    let msg = `GitHub API error (${res.status})`;
+    try { const j = await res.json(); if (j && j.message) msg += ": " + j.message; } catch {}
+    const err = new Error(msg);
+    err.status = res.status;
+    return err;
+  }
+  async function fetchRemote() {
+    const url = `${contentsUrl()}?ref=${encodeURIComponent(cfg.branch)}&_=${Date.now()}`;
+    const res = await fetch(url, { headers: apiHeaders(), cache: "no-store" });
+    if (res.status === 404) return { exists: false };
+    if (!res.ok) throw await apiError(res);
+    const json = await res.json();
+    return { exists: true, sha: json.sha, text: b64decode(json.content || "") };
+  }
+  function putRemote(text, shaForUpdate, message) {
+    const body = { message, content: b64encode(text), branch: cfg.branch };
+    if (shaForUpdate) body.sha = shaForUpdate;
+    return fetch(contentsUrl(), {
+      method: "PUT",
+      headers: Object.assign({ "Content-Type": "application/json" }, apiHeaders()),
+      body: JSON.stringify(body)
+    });
+  }
+
+  // ---------- state + UI ----------
+
+  function setState(s, detail, status) {
+    state = s;
+    lastError = detail || "";
+    lastErrorStatus = status || null;
+    refreshUI();
+  }
+  function refreshUI() { renderPill(); renderBanner(); }
+
+  function renderPill() {
+    const pill = document.getElementById("syncPill");
+    const label = document.getElementById("syncPillLabel");
+    if (!pill || !label) return;
+    pill.dataset.state = state;
+    let text;
+    switch (state) {
+      case "unconfigured": text = "Set up sync"; break;
+      case "synced": text = "Synced" + (lastSyncedAt ? " " + relTime(lastSyncedAt) : ""); break;
+      case "syncing": text = "Syncing…"; break;
+      case "offline": text = isDirty() ? "Offline — will sync" : "Offline"; break;
+      case "conflict": text = "Conflict"; break;
+      case "error": text = (lastErrorStatus === 401 || lastErrorStatus === 403) ? "Needs setup" : "Sync error"; break;
+      default: text = state;
+    }
+    label.textContent = text;
+  }
+
+  function renderBanner() {
+    const el = document.getElementById("syncBanner");
+    if (!el) return;
+    el.innerHTML = "";
+
+    if (remoteReadError) {
+      const b = document.createElement("div");
+      b.className = "banner error";
+      const t = document.createElement("div"); t.className = "banner-title"; t.textContent = "Cloud file couldn't be read";
+      const p = document.createElement("div"); p.textContent = "Your data on this device is safe. " + remoteReadError;
+      const actions = document.createElement("div"); actions.className = "banner-actions";
+      const overwrite = document.createElement("button"); overwrite.textContent = "Overwrite cloud with this device";
+      overwrite.onclick = () => {
+        const shaToUse = conflictRemote ? conflictRemote.sha : sha;
+        remoteReadError = null; conflictRemote = null;
+        push({ force: true, overrideSha: shaToUse });
+      };
+      const dismiss = document.createElement("button"); dismiss.textContent = "Dismiss";
+      dismiss.onclick = () => { remoteReadError = null; refreshUI(); };
+      actions.append(overwrite, dismiss);
+      b.append(t, p, actions);
+      el.appendChild(b);
+      return;
+    }
+
+    if (state === "conflict" && conflictRemote) {
+      const b = document.createElement("div");
+      b.className = "banner";
+      const t = document.createElement("div"); t.className = "banner-title"; t.textContent = "This device and the cloud have both changed";
+      const p = document.createElement("div"); p.textContent = "Either way, the other version stays recoverable in the repo's history.";
+      const actions = document.createElement("div"); actions.className = "banner-actions";
+      const keep = document.createElement("button"); keep.className = "primary"; keep.textContent = "Keep this device";
+      keep.onclick = resolveKeepLocal;
+      const cloud = document.createElement("button"); cloud.textContent = "Use cloud version";
+      cloud.onclick = resolveUseCloud;
+      actions.append(keep, cloud);
+      b.append(t, p, actions);
+      el.appendChild(b);
+      return;
+    }
+
+    if (state === "error" && lastError) {
+      const b = document.createElement("div");
+      b.className = "banner error";
+      const t = document.createElement("div"); t.className = "banner-title"; t.textContent = "Sync problem";
+      const p = document.createElement("div"); p.textContent = lastError;
+      const actions = document.createElement("div"); actions.className = "banner-actions";
+      const openSettings = document.createElement("button"); openSettings.textContent = "Open sync settings";
+      openSettings.onclick = openModal;
+      actions.append(openSettings);
+      b.append(t, p, actions);
+      el.appendChild(b);
+    }
+  }
+
+  // ---------- push ----------
+
+  function scheduleDebouncedPush() {
+    if (!pushFirstQueuedAt) pushFirstQueuedAt = Date.now();
+    if (Date.now() - pushFirstQueuedAt >= PUSH_MAX_WAIT_MS) {
+      if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
+      push();
+      return;
+    }
+    if (pushTimer) clearTimeout(pushTimer);
+    pushTimer = setTimeout(() => { pushTimer = null; push(); }, PUSH_DEBOUNCE_MS);
+  }
+  function flushPushNow() {
+    if (pushTimer) { clearTimeout(pushTimer); pushTimer = null; }
+    if (isConfigured() && isDirty() && state !== "conflict") push();
+  }
+
+  async function push(opts) {
+    opts = opts || {};
+    pushFirstQueuedAt = null;
+    if (!isConfigured()) return;
+    if (pushInFlight) { pendingPushAfterInFlight = true; return; }
+    if (!opts.force && !isDirty()) return;
+
+    pushInFlight = true;
+    setState("syncing");
+    const deviceName = cfg.device || guessDeviceName();
+    const doc = { schema: 1, updatedAt: new Date().toISOString(), updatedBy: deviceName, data, history };
+    const text = stringifyDoc(doc);
+    const shaToUse = "overrideSha" in opts ? opts.overrideSha : sha;
+
+    try {
+      const res = await putRemote(text, shaToUse, `Update inventory from ${deviceName}`);
+      if (res.status === 200 || res.status === 201) {
+        const json = await res.json();
+        sha = json.content.sha;
+        base = canonical();
+        lastSyncedAt = Date.now();
+        remoteReadError = null;
+        conflictRemote = null;
+        persist();
+        setState("synced");
+      } else if (res.status === 409 || res.status === 422) {
+        await handleConflict();
+      } else if (res.status === 401) {
+        setState("error", "The GitHub token was rejected — it may be wrong or expired.", 401);
+      } else if (res.status === 403) {
+        const err = await apiError(res);
+        setState("error", err.message, 403);
+      } else if (res.status === 404) {
+        setState("error", "GitHub couldn't find that repo or file path — check sync settings.", 404);
+      } else {
+        const err = await apiError(res);
+        setState("error", err.message, res.status);
+      }
+    } catch (e) {
+      setState("offline");
+    } finally {
+      pushInFlight = false;
+      if (pendingPushAfterInFlight) { pendingPushAfterInFlight = false; scheduleDebouncedPush(); }
+    }
+  }
+
+  async function handleConflict() {
+    try {
+      const remote = await fetchRemote();
+      if (!remote.exists) {
+        sha = null;
+        setState("error", "The file on GitHub seems to have been removed since the last sync.", 404);
+        return;
+      }
+      const parsed = parseDoc(remote.text);
+      conflictRemote = { sha: remote.sha, text: remote.text, parsed };
+      if (!parsed.ok) {
+        remoteReadError = parsed.error + " Fix the file, or overwrite the cloud with this device's copy.";
+        setState("error", "Cloud file has invalid data.");
+      } else {
+        setState("conflict");
+      }
+    } catch (e) {
+      classifyFetchError(e);
+    }
+  }
+
+  function resolveKeepLocal() {
+    if (!conflictRemote) return;
+    push({ force: true, overrideSha: conflictRemote.sha });
+  }
+  function resolveUseCloud() {
+    if (!conflictRemote || !conflictRemote.parsed || !conflictRemote.parsed.ok) return;
+    data = conflictRemote.parsed.doc.data;
+    history = conflictRemote.parsed.doc.history;
+    sha = conflictRemote.sha;
+    base = canonical();
+    lastSyncedAt = Date.now();
+    conflictRemote = null;
+    remoteReadError = null;
+    persist();
+    persistLocalDataOnly();
+    render();
+    setState("synced");
+  }
+
+  // ---------- pull ----------
+
+  function adoptRemote(remote) {
+    const parsed = parseDoc(remote.text);
+    if (!parsed.ok) {
+      conflictRemote = { sha: remote.sha, text: remote.text, parsed };
+      remoteReadError = parsed.error + " Fix the file, or overwrite the cloud with this device's copy.";
+      setState("error", "Cloud file has invalid data.");
+      return;
+    }
+    data = parsed.doc.data;
+    history = parsed.doc.history;
+    sha = remote.sha;
+    base = canonical(); // set BEFORE persisting/rendering so nothing reads this as a new local change
+    lastSyncedAt = Date.now();
+    persist();
+    persistLocalDataOnly();
+    render();
+    setState("synced");
+  }
+
+  async function pull() {
+    if (!isConfigured() || pullInFlight) return;
+    if (state === "conflict") return; // wait for the user to resolve it first
+    pullInFlight = true;
+    try {
+      const remote = await fetchRemote();
+      if (!remote.exists) {
+        await push({ force: true }); // nothing published yet — bootstrap from this device
+        return;
+      }
+      if (remote.sha === sha) {
+        setState(isDirty() ? "offline" : "synced");
+        if (isDirty()) scheduleDebouncedPush();
+        return;
+      }
+      if (!isDirty()) {
+        if (userIsEditing()) { pendingRemoteDoc = remote; return; }
+        adoptRemote(remote);
+        return;
+      }
+      const parsed = parseDoc(remote.text);
+      conflictRemote = { sha: remote.sha, text: remote.text, parsed };
+      if (!parsed.ok) {
+        remoteReadError = parsed.error + " Fix the file, or overwrite the cloud with this device's copy.";
+        setState("error", "Cloud file has invalid data.");
+      } else {
+        setState("conflict");
+      }
+    } catch (e) {
+      classifyFetchError(e);
+    } finally {
+      pullInFlight = false;
+    }
+  }
+
+  function onLocalChange() {
+    if (!isConfigured()) return;
+    if (state === "conflict") return; // don't push over an unresolved conflict
+    if (!isDirty()) return;
+    scheduleDebouncedPush();
+  }
+
+  document.addEventListener("focusout", () => {
+    setTimeout(() => {
+      if (pendingRemoteDoc && !userIsEditing()) {
+        const doc = pendingRemoteDoc;
+        pendingRemoteDoc = null;
+        adoptRemote(doc);
+      }
+    }, 50);
+  });
+
+  // ---------- settings modal ----------
+
+  function openModal() {
+    const c = cfg || {};
+    document.getElementById("cfgOwner").value = c.owner || "";
+    document.getElementById("cfgRepo").value = c.repo || "";
+    document.getElementById("cfgPath").value = c.path || "inventory.json";
+    document.getElementById("cfgBranch").value = c.branch || "main";
+    document.getElementById("cfgToken").value = c.token || "";
+    const statusEl = document.getElementById("cfgStatus");
+    statusEl.textContent = ""; statusEl.className = "modal-status";
+    document.getElementById("cfgRemoveRow").style.display = isConfigured() ? "flex" : "none";
+    document.getElementById("syncModalOverlay").classList.remove("hidden");
+  }
+  function closeModal() { document.getElementById("syncModalOverlay").classList.add("hidden"); }
+
+  async function onSaveConfig() {
+    const owner = document.getElementById("cfgOwner").value.trim();
+    const repo = document.getElementById("cfgRepo").value.trim();
+    const path = document.getElementById("cfgPath").value.trim() || "inventory.json";
+    const branch = document.getElementById("cfgBranch").value.trim() || "main";
+    const token = document.getElementById("cfgToken").value.trim();
+    const statusEl = document.getElementById("cfgStatus");
+
+    if (!owner || !repo || !token) {
+      statusEl.textContent = "Username, repo, and token are all required.";
+      statusEl.className = "modal-status err";
+      return;
+    }
+
+    statusEl.textContent = "Checking…";
+    statusEl.className = "modal-status";
+    const prevCfg = cfg;
+    cfg = { owner, repo, path, branch, token, device: guessDeviceName() };
+
+    try {
+      const remote = await fetchRemote();
+      saveConfig(cfg);
+
+      let finalState = "synced";
+      let finalDetail = "";
+      if (!remote.exists) {
+        sha = null; base = null; // dirty on purpose: this device's data becomes the first version
+      } else {
+        const parsed = parseDoc(remote.text);
+        if (parsed.ok) {
+          data = parsed.doc.data;
+          history = parsed.doc.history;
+          sha = remote.sha;
+          base = canonical();
+          persistLocalDataOnly();
+          render();
+          lastSyncedAt = Date.now();
+        } else {
+          sha = remote.sha; base = null;
+          remoteReadError = parsed.error + " Fix the file, or overwrite the cloud with this device's copy.";
+          finalState = "error"; finalDetail = "Cloud file has invalid data.";
+        }
+      }
+      persist();
+
+      statusEl.textContent = "Connected.";
+      statusEl.className = "modal-status ok";
+      setTimeout(() => {
+        closeModal();
+        if (!remote.exists) { setState("syncing"); push({ force: true }); }
+        else setState(finalState, finalDetail);
+      }, 500);
+    } catch (e) {
+      cfg = prevCfg;
+      statusEl.textContent =
+        e.status === 401 ? "That token was rejected — check it's correct and hasn't expired." :
+        e.status === 403 ? "That token doesn't have write access to this repo's contents." :
+        e.status === 404 ? "Couldn't find that repo (or the token can't see it)." :
+        ("Couldn't connect: " + e.message);
+      statusEl.className = "modal-status err";
+    }
+  }
+
+  function onRemoveConfig() {
+    clearConfig();
+    cfg = null; sha = null; base = null; lastSyncedAt = null;
+    conflictRemote = null; remoteReadError = null; pendingRemoteDoc = null;
+    setState("unconfigured");
+    closeModal();
+  }
+
+  function wireUI() {
+    const pill = document.getElementById("syncPill");
+    pill.onclick = () => {
+      if (!isConfigured() || state === "conflict" || state === "error") { openModal(); return; }
+      pull();
+      flushPushNow();
+    };
+    const overlay = document.getElementById("syncModalOverlay");
+    document.getElementById("cfgCancel").onclick = closeModal;
+    document.getElementById("cfgSave").onclick = onSaveConfig;
+    document.getElementById("cfgRemove").onclick = onRemoveConfig;
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
+  }
+
+  // ---------- boot ----------
+
+  function init() {
+    cfg = loadConfig();
+    sha = localStorage.getItem(SHA_KEY) || null;
+    base = localStorage.getItem(BASE_KEY);
+    const lastAt = localStorage.getItem(LAST_KEY);
+    lastSyncedAt = lastAt ? Number(lastAt) : null;
+
+    wireUI();
+
+    if (!isConfigured()) {
+      setState("unconfigured");
+    } else {
+      setState(navigator.onLine === false ? "offline" : "syncing");
+      pull();
+    }
+
+    window.addEventListener("online", () => { if (isConfigured()) { pull(); flushPushNow(); } });
+    window.addEventListener("offline", () => { if (isConfigured() && state !== "conflict") setState("offline"); });
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") flushPushNow();
+      else if (document.visibilityState === "visible" && isConfigured()) pull();
+    });
+  }
+
+  return { init, onLocalChange };
+})();
+
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
   tab=b.dataset.tab;
   document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));
@@ -349,6 +1100,7 @@ document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{
 });
 
 render();
+if (Sync) Sync.init();
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
