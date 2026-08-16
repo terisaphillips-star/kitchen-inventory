@@ -1,4 +1,4 @@
-const CACHE_NAME = "kitchen-inventory-v10";
+const CACHE_NAME = "kitchen-inventory-v11";
 const ASSETS = [
   "./index.html",
   "./manifest.json",
