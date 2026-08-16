@@ -248,7 +248,7 @@ const initial = {
   }
 };
 
-let data = JSON.parse(localStorage.getItem("kitchenInventoryV1") || "null") || initial;
+let data = JSON.parse(localStorage.getItem("kitchenInventoryV1") || "null") || JSON.parse(JSON.stringify(initial));
 let history = JSON.parse(localStorage.getItem("kitchenInventoryHistoryV1") || "[]");
 let tab = "dinner";
 let collapsed = {};
@@ -485,6 +485,7 @@ Sync = (function () {
   let lastError = "";
   let lastErrorStatus = null;
   let conflictRemote = null;    // { sha, text, parsed } while state === conflict/error(bad remote)
+  let conflictKind = "update";  // "update" (ongoing divergence) | "setup" (first connect, both sides have data)
   let remoteReadError = null;   // message shown above the conflict/error banner priority
   let pendingRemoteDoc = null;  // a pull that arrived while the user was mid-edit
 
@@ -627,6 +628,13 @@ Sync = (function () {
     return JSON.stringify({ data, history });
   }
 
+  // True only for a device that has never been used — its data is still
+  // exactly the seeded default. Safe to silently adopt a remote file in
+  // that case; anything else means the user has real data worth protecting.
+  function isUntouchedDefault() {
+    return canonical() === JSON.stringify({ data: initial, history: [] });
+  }
+
   function isDirty() {
     return base === null || canonical() !== base;
   }
@@ -763,8 +771,14 @@ Sync = (function () {
     if (state === "conflict" && conflictRemote) {
       const b = document.createElement("div");
       b.className = "banner";
-      const t = document.createElement("div"); t.className = "banner-title"; t.textContent = "This device and the cloud have both changed";
-      const p = document.createElement("div"); p.textContent = "Either way, the other version stays recoverable in the repo's history.";
+      const t = document.createElement("div"); t.className = "banner-title";
+      t.textContent = conflictKind === "setup"
+        ? "This device already has its own data"
+        : "This device and the cloud have both changed";
+      const p = document.createElement("div");
+      p.textContent = conflictKind === "setup"
+        ? "The cloud file has different data too. Pick which one this device should keep using."
+        : "Either way, the other version stays recoverable in the repo's history.";
       const actions = document.createElement("div"); actions.className = "banner-actions";
       const keep = document.createElement("button"); keep.className = "primary"; keep.textContent = "Keep this device";
       keep.onclick = resolveKeepLocal;
@@ -863,6 +877,7 @@ Sync = (function () {
       }
       const parsed = parseDoc(remote.text);
       conflictRemote = { sha: remote.sha, text: remote.text, parsed };
+      conflictKind = "update";
       if (!parsed.ok) {
         remoteReadError = parsed.error + " Fix the file, or overwrite the cloud with this device's copy.";
         setState("error", "Cloud file has invalid data.");
@@ -876,6 +891,7 @@ Sync = (function () {
 
   function resolveKeepLocal() {
     if (!conflictRemote) return;
+    conflictKind = "update";
     push({ force: true, overrideSha: conflictRemote.sha });
   }
   function resolveUseCloud() {
@@ -886,6 +902,7 @@ Sync = (function () {
     base = canonical();
     lastSyncedAt = Date.now();
     conflictRemote = null;
+    conflictKind = "update";
     remoteReadError = null;
     persist();
     persistLocalDataOnly();
@@ -1011,7 +1028,20 @@ Sync = (function () {
         sha = null; base = null; // dirty on purpose: this device's data becomes the first version
       } else {
         const parsed = parseDoc(remote.text);
-        if (parsed.ok) {
+        if (!parsed.ok) {
+          sha = remote.sha; base = null;
+          remoteReadError = parsed.error + " Fix the file, or overwrite the cloud with this device's copy.";
+          finalState = "error"; finalDetail = "Cloud file has invalid data.";
+        } else if (!isUntouchedDefault() &&
+                   JSON.stringify({ data: parsed.doc.data, history: parsed.doc.history }) !== canonical()) {
+          // This device already has real data that differs from the cloud —
+          // don't silently overwrite it on connect. Same choice as an
+          // ongoing conflict, just worded for first-time setup.
+          sha = remote.sha; base = null;
+          conflictRemote = { sha: remote.sha, text: remote.text, parsed };
+          conflictKind = "setup";
+          finalState = "conflict";
+        } else {
           data = parsed.doc.data;
           history = parsed.doc.history;
           sha = remote.sha;
@@ -1019,10 +1049,6 @@ Sync = (function () {
           persistLocalDataOnly();
           render();
           lastSyncedAt = Date.now();
-        } else {
-          sha = remote.sha; base = null;
-          remoteReadError = parsed.error + " Fix the file, or overwrite the cloud with this device's copy.";
-          finalState = "error"; finalDetail = "Cloud file has invalid data.";
         }
       }
       persist();
@@ -1048,7 +1074,7 @@ Sync = (function () {
   function onRemoveConfig() {
     clearConfig();
     cfg = null; sha = null; base = null; lastSyncedAt = null;
-    conflictRemote = null; remoteReadError = null; pendingRemoteDoc = null;
+    conflictRemote = null; conflictKind = "update"; remoteReadError = null; pendingRemoteDoc = null;
     setState("unconfigured");
     closeModal();
   }
