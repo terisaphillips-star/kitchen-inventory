@@ -75,6 +75,7 @@
     border-radius:8px; padding:3px 1px;
   }
   .qty.flash { transform: scale(1.28); background:#30343a; }
+  .qty.qty-changed { color: #4fd1e0; }
   button { font: inherit; touch-action: manipulation; }
   .round {
     width:36px; height:36px; border-radius:10px; border:1px solid #4a5058;
@@ -245,7 +246,7 @@
 // Bump alongside CACHE_NAME in service-worker.js on every deploy. Baked
 // directly into this HTML so it reflects what actually got served, even
 // if the service worker itself is stuck on something stale.
-const APP_BUILD = "v9";
+const APP_BUILD = "v10";
 
 const initial = {
   dinner: {
@@ -271,6 +272,13 @@ let data = JSON.parse(localStorage.getItem("kitchenInventoryV1") || "null") || J
 let history = JSON.parse(localStorage.getItem("kitchenInventoryHistoryV1") || "[]");
 let tab = "dinner";
 let collapsed = {};
+// Which items have had their quantity changed via +/- this session.
+// Deliberately in-memory only (never persisted): it should survive the
+// app being backgrounded and brought back, but clear on an actual reload.
+let changedSinceOpen = new Set();
+function qtyKey(t, category, name) {
+  return [t, category, name.toLowerCase()].join("~");
+}
 // Declared here (not as `const Sync = ...` further down) so that save()'s
 // early unconditional call at startup, before the Sync module below has run,
 // sees a plain null instead of throwing a temporal-dead-zone ReferenceError.
@@ -394,6 +402,7 @@ function categoryEl(category, items) {
 
     const qty = document.createElement("div");
     qty.className="qty";
+    if (changedSinceOpen.has(qtyKey(tab, category, name))) qty.classList.add("qty-changed");
     qty.textContent=q;
 
     const plus = document.createElement("button");
@@ -465,6 +474,7 @@ function change(category, idx, delta) {
   const arr = data[tab][category];
   if (!arr[idx]) return;
   arr[idx][1] = Math.max(0, arr[idx][1] + delta);
+  changedSinceOpen.add(qtyKey(tab, category, arr[idx][0]));
   playTick(delta);
   save();
   render();
