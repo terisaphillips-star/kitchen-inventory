@@ -20,7 +20,10 @@
     background: #111315;
     color: #f2f3f5;
   }
-  .app { max-width: 760px; margin: 0 auto; padding: 20px 16px 40px; }
+  .app {
+    max-width: 760px; margin: 0 auto;
+    padding: max(20px, env(safe-area-inset-top)) 16px max(40px, env(safe-area-inset-bottom));
+  }
   h1 { font-size: 30px; margin: 4px 0 16px; letter-spacing: -0.6px; }
   .tabs {
     display: flex; gap: 8px; margin-bottom: 18px;
