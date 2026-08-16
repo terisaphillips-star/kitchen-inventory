@@ -26,15 +26,19 @@
   }
   h1 { font-size: 30px; margin: 4px 0 16px; letter-spacing: -0.6px; }
   .tabs {
-    display: flex; gap: 8px; margin-bottom: 18px;
+    display: flex; flex-wrap: nowrap; gap: 8px; margin-bottom: 18px;
     border-bottom: 1px solid #30343a; padding-bottom: 8px;
+    overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch;
   }
+  .tabs::-webkit-scrollbar { display: none; }
   .tab {
+    flex: 0 0 auto;
     border: 0; background: transparent; padding: 10px 14px;
     border-radius: 10px; font-size: 16px; font-weight: 600; color: #a9afb8;
-    cursor: pointer;
+    cursor: pointer; white-space: nowrap;
   }
   .tab.active { background: #2a2e34; color: #f5f6f7; }
+  .tab-icon { color: #7fb8e6; margin-right: 5px; }
   .summary {
     background: #1b1e22; border: 1px solid #30343a; border-radius: 16px;
     padding: 15px 16px; margin-bottom: 22px;
@@ -71,7 +75,7 @@
     border-radius:8px; padding:3px 1px;
   }
   .qty.flash { transform: scale(1.28); background:#30343a; }
-  button { font: inherit; }
+  button { font: inherit; touch-action: manipulation; }
   .round {
     width:36px; height:36px; border-radius:10px; border:1px solid #4a5058;
     background:#24282e; color:#ffffff; font-size:21px; line-height:1; cursor:pointer;
@@ -171,6 +175,7 @@
   .modal-actions .btn-save { background:#e7e9ec; color:#15171a; }
   .modal-actions .btn-cancel { background:#2a2e34; color:#d9dde2; }
   .modal-actions .btn-danger { background:transparent; color:#e6534a; border:1px solid #5a2424; flex:0 0 auto; }
+  .build-info { color:#5a616b; font-size:11px; margin-top:14px; text-align:center; }
   @media (max-width:480px) {
     .app { padding: 18px 10px 35px; }
     h1 { font-size:28px; }
@@ -192,8 +197,10 @@
   </div>
   <div id="syncBanner"></div>
   <div class="tabs">
-    <button class="tab active" data-tab="dinner">Dinner Inventory</button>
-    <button class="tab" data-tab="ingredients">Ingredients</button>
+    <button class="tab active" data-tab="dinner"><span class="tab-icon">❄</span>Dinner Inventory</button>
+    <button class="tab" data-tab="ingredients"><span class="tab-icon">❄</span>Ingredients</button>
+    <button class="tab" data-tab="fridge">Fridge Inventory</button>
+    <button class="tab" data-tab="pantry">Pantry Items</button>
   </div>
   <div id="content"></div>
 </div>
@@ -230,10 +237,16 @@
     <div class="modal-actions" id="cfgRemoveRow" style="display:none">
       <button class="btn-danger" id="cfgRemove" type="button">Remove sync from this device</button>
     </div>
+    <div class="build-info" id="buildInfo"></div>
   </div>
 </div>
 
 <script>
+// Bump alongside CACHE_NAME in service-worker.js on every deploy. Baked
+// directly into this HTML so it reflects what actually got served, even
+// if the service worker itself is stuck on something stale.
+const APP_BUILD = "v9";
+
 const initial = {
   dinner: {
     "Main Meal Portions": [
@@ -245,6 +258,12 @@ const initial = {
   },
   ingredients: {
     "Ingredients": [["Heavy Cream",3],["Burger Buns",1],["Crumbled Bacon",5],["Green Onions",4],["Pesto",4]]
+  },
+  fridge: {
+    "Fridge Items": []
+  },
+  pantry: {
+    "Pantry Items": []
   }
 };
 
@@ -261,6 +280,14 @@ function purgeZeroItemsOnOpen() {
     tabObj[cat] = tabObj[cat].filter(([name,q]) => q > 0);
   }));
 }
+// Backfills tabs added after a device's data was first created, so an
+// existing install (real data already in localStorage, no fridge/pantry
+// keys yet) doesn't throw when those tabs render.
+function ensureTabsExist() {
+  if (!data.fridge) data.fridge = { "Fridge Items": [] };
+  if (!data.pantry) data.pantry = { "Pantry Items": [] };
+}
+ensureTabsExist();
 purgeZeroItemsOnOpen();
 save();
 
@@ -394,7 +421,38 @@ function categoryEl(category, items) {
   return wrap;
 }
 
+// Touching down to stop a momentum-scroll can land on a +/- button and
+// register as a tap. Ignore taps that land within this long of the last
+// scroll event, so stopping a scroll doesn't also nudge a quantity.
+const SCROLL_TAP_GUARD_MS = 350;
+let lastScrollAt = 0;
+window.addEventListener("scroll", () => { lastScrollAt = Date.now(); }, { passive: true });
+function recentlyScrolled() {
+  return Date.now() - lastScrollAt < SCROLL_TAP_GUARD_MS;
+}
+
+// A short synthesized tick on +/- taps, since iOS Safari doesn't implement
+// the Vibration API at all (a platform limitation, not fixable from here) —
+// sound is the only real-time feedback channel available on iPhone.
+let audioCtx = null;
+function playTick(delta) {
+  try {
+    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === "suspended") audioCtx.resume();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.frequency.value = delta > 0 ? 880 : 660;
+    gain.gain.setValueAtTime(0.15, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.045);
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.045);
+  } catch (e) {}
+  if (navigator.vibrate) navigator.vibrate(10); // no-op on iOS Safari; best-effort elsewhere
+}
+
 function moveUp(category, idx) {
+  if (recentlyScrolled()) return;
   const arr = data[tab][category];
   if (idx <= 0 || idx >= arr.length) return;
   [arr[idx-1], arr[idx]] = [arr[idx], arr[idx-1]];
@@ -403,9 +461,11 @@ function moveUp(category, idx) {
 }
 
 function change(category, idx, delta) {
+  if (recentlyScrolled()) return;
   const arr = data[tab][category];
   if (!arr[idx]) return;
   arr[idx][1] = Math.max(0, arr[idx][1] + delta);
+  playTick(delta);
   save();
   render();
 }
@@ -611,6 +671,8 @@ Sync = (function () {
       if (!cleanData.dinner) cleanData.dinner = {};
       if (!cleanData.dinner["Main Meal Portions"]) cleanData.dinner["Main Meal Portions"] = [];
       if (!cleanData.ingredients) cleanData.ingredients = {};
+      if (!cleanData.fridge) cleanData.fridge = { "Fridge Items": [] };
+      if (!cleanData.pantry) cleanData.pantry = { "Pantry Items": [] };
 
       let cleanHistory = [];
       if (Array.isArray(obj.history)) {
@@ -995,6 +1057,8 @@ Sync = (function () {
     const statusEl = document.getElementById("cfgStatus");
     statusEl.textContent = ""; statusEl.className = "modal-status";
     document.getElementById("cfgRemoveRow").style.display = isConfigured() ? "flex" : "none";
+    const swState = navigator.serviceWorker && navigator.serviceWorker.controller ? "active" : "none";
+    document.getElementById("buildInfo").textContent = `Build ${APP_BUILD} · service worker: ${swState}`;
     document.getElementById("syncModalOverlay").classList.remove("hidden");
   }
   function closeModal() { document.getElementById("syncModalOverlay").classList.add("hidden"); }
